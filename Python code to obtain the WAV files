@@ -1,0 +1,188 @@
+import numpy as np
+import pandas as pd
+from scipy.io import wavfile
+
+
+def load_amplitude(csv_path):
+    """
+    Safely load amplitude arrays from CSV files.
+    Expected CSV format:
+    time, amplitude
+    """
+
+    try:
+        df = pd.read_csv(csv_path, names=['time', 'amplitude'])
+        return df['amplitude'].values
+
+    except FileNotFoundError:
+        print(f"Error: Missing file '{csv_path}'")
+        return None
+
+
+def save_mono_wav(filename, amplitude_array, sample_rate, global_norm_factor):
+    """
+    Normalize and save a mono WAV file.
+    """
+
+    normalized = amplitude_array / global_norm_factor
+
+    # Prevent clipping
+    normalized = np.clip(normalized, -1.0, 1.0)
+
+    int16_data = (normalized * 32767).astype(np.int16)
+
+    wavfile.write(filename, sample_rate, int16_data)
+
+    print(f"Generated mono file: {filename}")
+
+
+if __name__ == "__main__":
+
+    SAMPLE_RATE = 44100
+
+    print("Loading simulation CSV data...\n")
+
+    # ============================================================
+    # LOAD SIGNALS
+    # ============================================================
+
+    amp_src = load_amplitude("source.csv")
+    amp_left = load_amplitude("mic_left.csv")
+    amp_right = load_amplitude("mic_right.csv")
+
+    if amp_src is None or amp_left is None or amp_right is None:
+        print("Aborting due to missing files.")
+        exit()
+
+    # ============================================================
+    # GLOBAL NORMALIZATION
+    # ============================================================
+
+    global_max = max(
+        np.max(np.abs(amp_src)),
+        np.max(np.abs(amp_left)),
+        np.max(np.abs(amp_right))
+    )
+
+    if global_max == 0:
+        global_max = 1.0
+
+    print(f"Global normalization factor: {global_max}")
+
+    # ============================================================
+    # SAVE INDIVIDUAL MONO FILES
+    # ============================================================
+
+    print("\n--- Saving Mono Files ---")
+
+    save_mono_wav(
+        "source_clean.wav",
+        amp_src,
+        SAMPLE_RATE,
+        global_max
+    )
+
+    save_mono_wav(
+        "mic_left.wav",
+        amp_left,
+        SAMPLE_RATE,
+        global_max
+    )
+
+    save_mono_wav(
+        "mic_right.wav",
+        amp_right,
+        SAMPLE_RATE,
+        global_max
+    )
+
+    # ============================================================
+    # CREATE STEREO SPATIALIZED FILE
+    # ============================================================
+
+    print("\n--- Creating Stereo Spatialized File ---")
+
+    # Match lengths
+    target_length = max(
+        len(amp_src),
+        len(amp_left),
+        len(amp_right)
+    )
+
+    # Zero-padded arrays
+    src = np.zeros(target_length)
+    left = np.zeros(target_length)
+    right = np.zeros(target_length)
+
+    src[:len(amp_src)] = amp_src
+    left[:len(amp_left)] = amp_left
+    right[:len(amp_right)] = amp_right
+
+    # Normalize using same global factor
+    src /= global_max
+    left /= global_max
+    right /= global_max
+
+    # ============================================================
+    # OPTIONAL SOURCE MIX
+    # ============================================================
+
+    # Controls how much direct source appears in both ears
+    # 0.0 = only microphones
+    # 0.3 = subtle centered source
+    # 1.0 = strong centered source
+
+    source_mix = 0.3
+
+    left_channel = left + source_mix * src
+    right_channel = right + source_mix * src
+
+    # ============================================================
+    # PREVENT CLIPPING
+    # ============================================================
+
+    stereo_peak = max(
+        np.max(np.abs(left_channel)),
+        np.max(np.abs(right_channel))
+    )
+
+    if stereo_peak > 1.0:
+        left_channel /= stereo_peak
+        right_channel /= stereo_peak
+
+    # ============================================================
+    # CREATE STEREO SIGNAL
+    # ============================================================
+
+    # Column 0 -> Left speaker
+    # Column 1 -> Right speaker
+
+    stereo_signal = np.vstack((
+        left_channel,
+        right_channel
+    )).T
+
+    # Convert to 16-bit PCM
+    stereo_int16 = (stereo_signal * 32767).astype(np.int16)
+
+    # Save WAV
+    wavfile.write(
+        "validation_stereo.wav",
+        SAMPLE_RATE,
+        stereo_int16
+    )
+
+    # ============================================================
+    # FINISHED
+    # ============================================================
+
+    duration = target_length / SAMPLE_RATE
+
+    print("\nGenerated:")
+    print(" - source_clean.wav")
+    print(" - mic_left.wav")
+    print(" - mic_right.wav")
+    print(" - validation_stereo.wav")
+
+    print(f"\nStereo file duration: {duration:.4f} seconds")
+    print("Done.")
