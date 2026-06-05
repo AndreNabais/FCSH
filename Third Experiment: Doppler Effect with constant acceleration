@@ -1,0 +1,268 @@
+#include <iostream>
+#include <string>
+#include <cmath>
+#define _USE_MATH_DEFINES
+#include <math.h>
+#include <vector>
+#include <algorithm>
+#include <list>
+#include <fstream>
+#include <filesystem>
+#include <chrono>  // for high_resolution_clock
+using namespace std;
+
+void save_to_csv(const vector<float>& time, const vector<float>& data, const string& filename) {
+    ofstream file(filename);
+    for (size_t i = 0; i < time.size(); ++i)
+        file << time[i] << "," << data[i] << "\n";
+}
+
+class Source {
+    private:
+    double Amplitude;
+    double frequency;
+    int SampleRate;
+    int bufferSize;
+
+    public:
+    //constructor
+    Source(double amp, double freq, int sr, int bs)
+    : Amplitude(amp), frequency(freq), SampleRate(sr), bufferSize(bs) {}
+
+    vector<float> buffer_source() const {
+        vector<float> source(bufferSize);
+        for (int n=0; n<bufferSize; n++){
+            source[n] = Amplitude * sin(2.0 * M_PI * frequency * n / SampleRate);
+        }
+        return source;     
+    }
+
+    vector<float> time_source() const {
+        vector<float> time_s(bufferSize);
+        for (int n=0; n<bufferSize; n++){
+            time_s[n] = static_cast<float>(n) / static_cast<float>(SampleRate);  
+        } 
+        return time_s;  
+    } 
+
+    double getSampleRate() const{
+        return SampleRate;
+    }
+
+    double getBufferSize() const{
+        return bufferSize;
+    }
+};
+
+class Environment {
+    private:
+    double x_source;
+    double x_left;
+    double x_right;
+    double y_source;
+    double y_left;
+    double y_right;
+    double z_source;
+    double z_left;
+    double z_right;
+    double v;
+
+    public:
+    //constructor
+    Environment(double xs, double xl, double xr, double ys, double yl, double yr, double zs, double zl, double zr, double speed)
+    : x_source(xs), x_left(xl), x_right(xr), y_source(ys), y_left(yl),
+    y_right(yr), z_source(zs), z_left(zl), z_right(zr), v(speed) {}
+
+    pair<double,double> DelayTime() const{
+        double delayLeft = sqrt((x_left - x_source)*(x_left - x_source) + (y_left - y_source)*(y_left - y_source) +
+        (z_left - z_source)*(z_left - z_source))/v;
+        double delayRight = sqrt((x_right - x_source)*(x_right - x_source) + (y_right - y_source)*(y_right - y_source) +
+        (z_right - z_source)*(z_right - z_source))/v;  
+        return make_pair(delayLeft, delayRight);
+    }
+
+    pair<double,double> DelaySample(const Source& src) const{
+        auto [delayLeft, delayRight] = DelayTime();
+        double delaySampleLeft = delayLeft*src.getSampleRate();
+        double delaySampleRight = delayRight*src.getSampleRate();      
+        return make_pair(delaySampleLeft, delaySampleRight);
+    }
+
+    double get_x_left() const{
+        return x_left;
+    }
+
+    double get_x_right() const{
+        return x_right;
+    }
+};
+
+class Microphones {
+    private:
+        vector<float> micLeft;
+        // vector<float> micRight; // COMMENTED OUT
+
+    public:
+    // Changed return type to just return the single left vector
+    vector<float> capture(const Source& src, const Environment& env) {
+        auto [delaySampleLeft, delaySampleRight] = env.DelaySample(src);
+        auto buffer = src.buffer_source();
+        micLeft.resize(src.getBufferSize() + delaySampleLeft);
+        
+        for (int n=0; n<micLeft.size(); n++){
+            if ((n-delaySampleLeft) < 0) {
+                micLeft[n] = 0;
+            }
+            else {
+                micLeft[n] = buffer[n-delaySampleLeft];
+            }
+        }
+        return micLeft;
+    }
+};
+
+int main(){
+    // Record start time
+    auto start = std::chrono::high_resolution_clock::now();
+
+    int base_buffer_size = 512;
+    int sample_rate = 44100;
+    float acceleration = 68.60; 
+
+    // Calculate duration
+    //float total_time = (static_cast<float>(base_buffer_size) / sample_rate)*300;
+    float total_time = 10.0;
+    int total_samples = total_time * sample_rate;
+
+    Source src(0.5, 440.0, 44100, total_samples); 
+    Environment env1(0, -1.0, 1.0, 0, 0, 0, 0, 0, 0, 343); 
+    Environment env2(0, -3.0, 6.0, 0, 0, 0, 0, 0, 0, 343);
+    Microphones mic;
+    auto buffer = src.buffer_source();
+    float y_n_left; 
+    // float y_n_right; // COMMENTED OUT
+
+    // Compute velocity_left
+    float velocity_left = ((env2.get_x_left()-env1.get_x_left())/total_time);  
+    // float velocity_right = ((env2.get_x_right()-env1.get_x_right())/total_time); // COMMENTED OUT
+    //cout << "Velocity Left: " << velocity_left << " m/s" << endl;
+
+    // Save source CSV file
+    ofstream src_file("./source.csv");
+    for (int i=0; i<total_samples; i++){
+        float time_source = static_cast<float>(i)/static_cast<float>(src.getSampleRate());
+        src_file << time_source << "," << buffer[i] << "\n";
+    };
+    src_file.close();
+
+    string filenames[1] = {"./mic_left.csv"}; // Adjusted to hold only 1 filename
+    ofstream ofs;
+
+    // left_file processing
+    vector<float> time_left_storage;
+    vector<float> amplitude_left_storage;
+
+    for (int i=0; i<total_samples; i++){
+        float global_time = static_cast<float>(i)/static_cast<float>(src.getSampleRate());
+        //float x_mic_left = env1.get_x_left() + velocity_left*global_time; // uniform velocity
+        float x_mic_left = env1.get_x_left() + 0.5*acceleration*global_time*global_time;
+
+        // FIXED: Explicitly mapped x_mic_left to the secondary constructor argument (xl)
+        Environment env_moving(0, x_mic_left, 0, 0, 0, 0, 0, 0, 0, 343);
+        auto [delayLeft, _] = env_moving.DelayTime();
+        float time_left = global_time - delayLeft; 
+
+        // Lagrange interpolation for left mic
+        float n_float_left = time_left * src.getSampleRate();
+        int M_left = static_cast<int>(floor(n_float_left));
+        int N = 3; // cubic interpolation with 4 points
+        int start_index = M_left - (N / 2); // center the interpolation around M_left
+
+        if (start_index >= 0 && (start_index + N) < buffer.size()) {
+            float y_lagrange = 0.0; 
+
+            // Summation loop for Lagrange interpolation
+            for (int k=0; k<=N; k++){
+                int current_k_sample = start_index + k; 
+                float l_k = 1.0; 
+
+                // Product loop for Lagrange interpolation
+                for (int j=0; j<=N; j++){
+                    if (j != k) { 
+                        int current_j_sample = start_index + j; 
+                        float numerator = n_float_left - static_cast<float>(current_j_sample);
+                        float denominator = static_cast<float>(current_k_sample) - static_cast<float>(current_j_sample);
+            
+                        l_k *= (numerator / denominator);
+                    }
+                }
+                y_lagrange += buffer[current_k_sample] * l_k; 
+            }
+            y_n_left = y_lagrange; 
+            time_left_storage.push_back(global_time);
+            amplitude_left_storage.push_back(y_n_left);
+        }
+    };
+
+    // Save left channel output data
+    ofs.open(filenames[0]);
+    for (size_t i = 0; i < time_left_storage.size(); i++) {
+        ofs << time_left_storage[i] << "," << amplitude_left_storage[i] << "\n"; 
+    }
+    ofs.close();
+    cout << "Saved mic_left.csv with simulated movement!" << endl;
+
+    /* -------------------------------------------------------------
+       RIGHT MICROPHONE CODE ENTIRELY COMMENTED OUT BELOW
+       -------------------------------------------------------------
+    //right_file
+    vector<float> time_right_storage;
+    vector<float> amplitude_right_storage;
+
+    for (int i=0; i<total_samples; i++){
+        float global_time = static_cast<float>(i)/static_cast<float>(src.getSampleRate());
+        float x_mic_right = env1.get_x_right() + velocity_right*global_time; 
+
+        Environment env_moving(0, 0, x_mic_right, 0, 0, 0, 0, 0, 0, 343);
+        auto [_, delayRight] = env_moving.DelayTime();
+        float time_right = global_time - delayRight; 
+
+        float n_float_right = time_right * src.getSampleRate();
+        int M_right = static_cast<int>(floor(n_float_right));
+        int N = 3; 
+        int start_index = M_right - (N / 2); 
+
+        if (start_index >= 0 && (start_index + N) < buffer.size()) {
+            float y_lagrange = 0.0; 
+
+            for (int k=0; k<=N; k++){
+                int current_k_sample = start_index + k; 
+                float l_k = 1.0; 
+
+                for (int j=0; j<=N; j++){
+                    if (j != k) { 
+                        int current_j_sample = start_index + j; 
+                        float numerator = n_float_right - static_cast<float>(current_j_sample);
+                        float denominator = static_cast<float>(current_k_sample) - static_cast<float>(current_j_sample);
+            
+                        l_k *= (numerator / denominator);
+                    }
+                }
+                y_lagrange += buffer[current_k_sample] * l_k; 
+            }   
+            y_n_right = y_lagrange; 
+            time_right_storage.push_back(global_time);
+            amplitude_right_storage.push_back(y_n_right);
+        }
+    };
+    ------------------------------------------------------------- */
+
+    cout << "Saved all CSVs in: " << filesystem::current_path() << endl;
+
+    // Record end time
+    auto finish = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(finish - start);
+    cout << "Execution time: " << duration.count() << " milliseconds" << endl;
+    
+    return 0;
+}
