@@ -1,0 +1,208 @@
+#include <iostream>
+#include <string>
+#include <cmath>
+#define _USE_MATH_DEFINES
+#include <math.h>
+#include <vector>
+#include <algorithm>
+#include <list>
+#include <fstream>
+#include <filesystem>
+#include <chrono> 
+
+using namespace std;
+
+void save_to_csv(const vector<float>& time, const vector<float>& data, const string& filename) {
+    ofstream file(filename);
+    for (size_t i = 0; i < time.size(); ++i)
+        file << time[i] << "," << data[i] << "\n";
+}
+
+class Source {
+    private:
+    double Amplitude;
+    double frequency;
+    int SampleRate;
+    int bufferSize;
+
+    public:
+    Source(double amp, double freq, int sr, int bs)
+    : Amplitude(amp), frequency(freq), SampleRate(sr), bufferSize(bs){}
+
+    vector<float> buffer_source() const {
+        vector<float> source(bufferSize);
+        for (int n=0; n<bufferSize; n++){
+            source[n] = Amplitude * sin(2.0 * M_PI * frequency * n / SampleRate);
+        }
+        return source;     
+    }
+
+    vector<float> time_source() const {
+        vector<float> time_s(bufferSize);
+        for (int n=0; n<bufferSize; n++){
+            time_s[n] = static_cast<float>(n) / static_cast<float>(SampleRate);  
+        } 
+        return time_s;  
+    } 
+
+    double getSampleRate() const{
+        return SampleRate;
+    }
+
+    double getBufferSize() const{
+        return bufferSize;
+    }
+};
+
+class Environment {
+    private:
+    double x_source;
+    double x_mic;
+    double y_source;
+    double y_mic;
+    double z_source;
+    double z_mic;
+    double v;
+
+    public:
+    Environment(double xs, double xmic, double ys, double ymic, double zs, double zmic, double speed)
+    : x_source(xs), x_mic(xmic), y_source(ys), y_mic(ymic), z_source(zs), z_mic(zmic), v(speed) {}
+
+    double DelayTime() const{
+        double delay = sqrt((x_mic - x_source)*(x_mic - x_source) + (y_mic - y_source)*(y_mic - y_source) +
+        (z_mic - z_source)*(z_mic - z_source))/v;
+        return delay;
+    }
+
+    double DelaySample(const Source& src) const{
+        auto delay = DelayTime();
+        double delaySample = delay*src.getSampleRate();    
+        return delaySample;
+    }
+
+    double get_x_source() const{
+        return x_source;
+    }
+
+    double get_x_mic() const{
+        return x_mic;
+    }
+};
+
+class Microphones {
+    public:
+    vector<float> capture(const Source& src, const Environment& env) {
+        auto delaySample = env.DelaySample(src);
+        auto buffer = src.buffer_source();
+        int microphone_resize = src.getBufferSize() + delaySample;
+        vector<float> microphone(microphone_resize, 0.0f); 
+        
+        for (int n=0; n<microphone.size(); n++){
+            if ((n-delaySample) < 0) {
+                microphone[n] += 0;
+            }
+            else {
+                microphone[n] += buffer[n-delaySample];
+            }
+        }
+        return microphone;
+    }
+};
+
+int main(){
+    // Record start time
+    auto start = std::chrono::high_resolution_clock::now();
+
+    int base_buffer_size = 512;
+    int sample_rate = 44100;
+
+    Environment env1(-2000.0, 0, 0, 0, 0, 0, 343); 
+    Environment env2(2000.0, 0, 0, 0, 0, 0, 343);
+    Microphones mic;
+    float velocity_source = 500;
+
+    float y_n_source; 
+    float total_time = (static_cast<float>(env2.get_x_source() - env1.get_x_source()) / velocity_source); 
+    int total_samples = total_time * sample_rate;
+    Source src(0.5, 440.0, 44100, total_samples);
+    auto buffer = src.buffer_source();
+
+    vector<float> time_source_storage;
+    vector<float> amplitude_source_storage;
+
+    // Simulation processing loop
+    for (int i=0; i<total_samples; i++){
+        float global_time = static_cast<float>(i)/static_cast<float>(src.getSampleRate());
+        float x_source = env1.get_x_source() + velocity_source*global_time; 
+
+        Environment env_moving(x_source, 0, 0, 0, 0, 0, 343);
+        auto delaySource = env_moving.DelayTime();
+        float time_source = global_time - delaySource; 
+
+        // Lagrange interpolation
+        float n_float_source = time_source * src.getSampleRate();
+        int M_source = static_cast<int>(floor(n_float_source));
+        int N = 3; 
+        int start_index = M_source - (N / 2); 
+
+        if (start_index >= 0 && (start_index + N) < buffer.size()) {
+            float y_lagrange = 0.0; 
+
+            for (int k=0; k<=N; k++){
+                int current_k_sample = start_index + k; 
+                float l_k = 1.0; 
+
+                for (int j=0; j<=N; j++){
+                    if (j != k) { 
+                        int current_j_sample = start_index + j; 
+                        float numerator = n_float_source - static_cast<float>(current_j_sample);
+                        float denominator = static_cast<float>(current_k_sample) - static_cast<float>(current_j_sample);
+                        l_k *= (numerator / denominator);
+                    }
+                }
+                y_lagrange += buffer[current_k_sample] * l_k; 
+            }
+            y_n_source = y_lagrange; 
+            time_source_storage.push_back(global_time);
+            amplitude_source_storage.push_back(y_n_source);
+        }
+        else {
+            time_source_storage.push_back(global_time);
+            amplitude_source_storage.push_back(0.0f);
+        }
+    };
+
+    // ============================================================
+    // FIXED FILE WRITING SYSTEM
+    // ============================================================
+
+    // 1. Cleanly write the raw, unshifted baseline source code to source.csv
+    ofstream src_file("./source.csv");
+    if (src_file.is_open()) {
+        for (int i = 0; i < total_samples; i++) {
+            float time_source = static_cast<float>(i) / static_cast<float>(src.getSampleRate());
+            src_file << time_source << "," << buffer[i] << "\n";
+        }
+        src_file.close();
+        cout << "Successfully saved populated source.csv!" << endl;
+    }
+
+    // 2. Cleanly write the simulated moving tracking path to mic_captured.csv
+    ofstream mic_file("./mic_captured.csv");
+    if (mic_file.is_open()) {
+        for (size_t i = 0; i < time_source_storage.size(); i++) {
+            mic_file << time_source_storage[i] << "," << amplitude_source_storage[i] << "\n";
+        }
+        mic_file.close();
+        cout << "Successfully saved populated mic_captured.csv!" << endl;
+    }
+
+    cout << "Saved all CSVs in: " << filesystem::current_path() << endl;
+
+    // Record end time
+    auto finish = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(finish - start);
+    cout << "Execution time: " << duration.count() << " milliseconds" << endl;
+    
+    return 0;
+}
