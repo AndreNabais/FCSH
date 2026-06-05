@@ -1,3 +1,5 @@
+//FOR FIRST EXPERIMENT
+
 import numpy as np
 import pandas as pd
 from scipy.io import wavfile
@@ -184,5 +186,226 @@ if __name__ == "__main__":
     print(" - mic_right.wav")
     print(" - validation_stereo.wav")
 
+    print(f"\nStereo file duration: {duration:.4f} seconds")
+    print("Done.")
+
+
+
+
+---------------------------------------------------------------------------------------
+
+
+//FOR SECOND AND THIRD EXPERIMENT
+
+import numpy as np
+import pandas as pd
+from scipy.io import wavfile
+from pathlib import Path
+
+def load_amplitude(csv_path):
+    """
+    Safely load amplitude arrays from CSV files.
+    Expected CSV format: time, amplitude
+    """
+    try:
+        df = pd.read_csv(csv_path, names=['time', 'amplitude'])
+        return df['amplitude'].values
+    except FileNotFoundError:
+        print(f"Warning: File '{csv_path}' not found.")
+        return None
+
+if __name__ == "__main__":
+    SAMPLE_RATE = 44100
+
+    print("Loading simulation CSV data...\n")
+
+    # ============================================================
+    # LOAD SIGNALS (Only requiring Source and Mic Left now)
+    # ============================================================
+    amp_src = load_amplitude("source.csv")
+    amp_left = load_amplitude("mic_left.csv")
+
+    if amp_src is None or amp_left is None:
+        print("Aborting: Missing essential 'source.csv' or 'mic_left.csv' files.")
+        exit()
+
+    # ============================================================
+    # GLOBAL NORMALIZATION
+    # ============================================================
+    global_max = max(
+        np.max(np.abs(amp_src)),
+        np.max(np.abs(amp_left))
+    )
+
+    if global_max == 0:
+        global_max = 1.0
+
+    print(f"Global normalization factor: {global_max}")
+
+    # ============================================================
+    # SAVE INDIVIDUAL MONO FILES
+    # ============================================================
+    print("\n--- Saving Mono Files ---")
+
+    # Save the original baseline signal
+    normalized_src = np.clip(amp_src / global_max, -1.0, 1.0)
+    int16_src = (normalized_src * 32767).astype(np.int16)
+    wavfile.write("source_clean.wav", SAMPLE_RATE, int16_src)
+    print("Generated mono file: source_clean.wav")
+
+    # Save the Doppler-shifted left microphone signal
+    normalized_left = np.clip(amp_left / global_max, -1.0, 1.0)
+    int16_left = (normalized_left * 32767).astype(np.int16)
+    wavfile.write("mic_left.wav", SAMPLE_RATE, int16_left)
+    print("Generated mono file: mic_left.wav")
+
+    # ============================================================
+    # CREATE CLEAN MONO-TO-STEREO FILE (No Blending)
+    # ============================================================
+    print("\n--- Creating Validation Stereo File ---")
+
+    # Match lengths between the source timeline and mic timeline
+    target_length = max(len(amp_src), len(amp_left))
+    
+    left_channel = np.zeros(target_length)
+    right_channel = np.zeros(target_length)
+
+    # Place the pure moving microphone data onto the left channel
+    left_channel[:len(amp_left)] = amp_left / global_max
+    
+    # FIX: Set source_mix to 0.0 so we listen strictly to our simulation, 
+    # and map it to the right ear to easily contrast the two tracks!
+    right_channel[:len(amp_src)] = amp_src / global_max 
+
+    # Prevent clipping
+    stereo_peak = max(np.max(np.abs(left_channel)), np.max(np.abs(right_channel)))
+    if stereo_peak > 1.0:
+        left_channel /= stereo_peak
+        right_channel /= stereo_peak
+
+    # Combine into a dual-mono/stereo spatial array
+    # Left Ear = Moving Doppler Mic | Right Ear = Static Original Source
+    stereo_signal = np.vstack((left_channel, right_channel)).T
+    stereo_int16 = (stereo_signal * 32767).astype(np.int16)
+
+    wavfile.write("validation_stereo.wav", SAMPLE_RATE, stereo_int16)
+
+    duration = target_length / SAMPLE_RATE
+    print("\nGenerated:")
+    print(" - source_clean.wav")
+    print(" - mic_left.wav")
+    print(" - validation_stereo.wav (Left Ear: Moving Mic, Right Ear: Clean Source)")
+    print(f"\nStereo file duration: {duration:.4f} seconds")
+    print("Done.")
+
+
+
+
+
+
+
+------------------------------------------------------------------------------------------
+
+
+//FOR FINAL EXPERIMENT
+
+import numpy as np
+import pandas as pd
+from scipy.io import wavfile
+from pathlib import Path
+
+def load_amplitude(csv_path):
+    """
+    Safely load amplitude arrays from CSV files.
+    Expected CSV format: time, amplitude
+    """
+    try:
+        df = pd.read_csv(csv_path, names=['time', 'amplitude'])
+        return df['amplitude'].values
+    except FileNotFoundError:
+        print(f"Warning: File '{csv_path}' not found.")
+        return None
+
+if __name__ == "__main__":
+    SAMPLE_RATE = 44100
+
+    print("Loading simulation CSV data...\n")
+
+    # ============================================================
+    # LOAD SIGNALS (Only requiring Source and Mic Left now)
+    # ============================================================
+    amp_src = load_amplitude("source.csv")
+    amp_left = load_amplitude("mic_captured.csv")
+
+    if amp_src is None or amp_left is None:
+        print("Aborting: Missing essential 'source.csv' or 'mic_captured.csv' files.")
+        exit()
+
+    # ============================================================
+    # GLOBAL NORMALIZATION
+    # ============================================================
+    global_max = max(
+        np.max(np.abs(amp_src)),
+        np.max(np.abs(amp_left))
+    )
+
+    if global_max == 0:
+        global_max = 1.0
+
+    print(f"Global normalization factor: {global_max}")
+
+    # ============================================================
+    # SAVE INDIVIDUAL MONO FILES
+    # ============================================================
+    print("\n--- Saving Mono Files ---")
+
+    # Save the original baseline signal
+    normalized_src = np.clip(amp_src / global_max, -1.0, 1.0)
+    int16_src = (normalized_src * 32767).astype(np.int16)
+    wavfile.write("source_clean.wav", SAMPLE_RATE, int16_src)
+    print("Generated mono file: source_clean.wav")
+
+    # Save the Doppler-shifted left microphone signal
+    normalized_left = np.clip(amp_left / global_max, -1.0, 1.0)
+    int16_left = (normalized_left * 32767).astype(np.int16)
+    wavfile.write("mic_captured.wav", SAMPLE_RATE, int16_left)
+    print("Generated mono file: mic_captured.wav")
+
+    # ============================================================
+    # CREATE CLEAN MONO-TO-STEREO FILE (No Blending)
+    # ============================================================
+    print("\n--- Creating Validation Stereo File ---")
+
+    # Match lengths between the source timeline and mic timeline
+    target_length = max(len(amp_src), len(amp_left))
+    
+    left_channel = np.zeros(target_length)
+    right_channel = np.zeros(target_length)
+
+    # Place the pure moving microphone data onto the left channel
+    left_channel[:len(amp_left)] = amp_left / global_max
+    
+    # FIX: Set source_mix to 0.0 so we listen strictly to our simulation, 
+    # and map it to the right ear to easily contrast the two tracks!
+    right_channel[:len(amp_src)] = amp_src / global_max 
+
+    # Prevent clipping
+    stereo_peak = max(np.max(np.abs(left_channel)), np.max(np.abs(right_channel)))
+    if stereo_peak > 1.0:
+        left_channel /= stereo_peak
+        right_channel /= stereo_peak
+
+    # Combine into a dual-mono/stereo spatial array
+    # Left Ear = Moving Doppler Mic | Right Ear = Static Original Source
+    stereo_signal = np.vstack((left_channel, right_channel)).T
+    stereo_int16 = (stereo_signal * 32767).astype(np.int16)
+
+    wavfile.write("validation_stereo.wav", SAMPLE_RATE, stereo_int16)
+
+    duration = target_length / SAMPLE_RATE
+    print("\nGenerated:")
+    print(" - source_clean.wav")
+    print(" - mic_captured.wav")
+    print(" - validation_stereo.wav (Left Ear: Moving Mic, Right Ear: Clean Source)")
     print(f"\nStereo file duration: {duration:.4f} seconds")
     print("Done.")
